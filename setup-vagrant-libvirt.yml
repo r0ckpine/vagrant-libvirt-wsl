@@ -1,0 +1,109 @@
+---
+- name: Setup Vagrant-libvirt
+  hosts: vagrant_host
+  tasks:
+    ### Install libvirt
+    # https://vagrant-libvirt.github.io/vagrant-libvirt/installation.html#centos
+    - name: Install dnf-plugins-core
+      ansible.builtin.dnf:
+        name: dnf-plugins-core
+        state: present
+        update_cache: true
+      become: true
+      tags: libvirt
+
+    - name: Enable CRB repository
+      ansible.builtin.command: >
+        dnf config-manager --set-enabled crb
+      become: true
+      tags: libvirt
+
+    - name: Install the virtualization packages and the remaining vagrant-libvirt dependencies
+      ansible.builtin.dnf:
+        name:
+          - '@Virtualization Hypervisor'
+          - '@Virtualization Tools'
+          - '@Development Tools'
+          - NetworkManager
+          - libvirt-devel
+          - guestfs-tools
+          - rsync
+          - vim
+          - tcpdump
+          - bind-utils
+        state: present
+        update_cache: true
+      become: true
+      tags: libvirt
+
+    - name: Unmask NetworkManager service
+      ansible.builtin.command: >
+        systemctl unmask NetworkManager
+      become: true
+      tags: libvirt
+
+    - name: Start/Enable NetworkManager service
+      ansible.builtin.service:
+        name: NetworkManager
+        state: started
+        enabled: true
+      become: true
+      tags: libvirt
+
+    - name: Start/Enable libvirtd service
+      ansible.builtin.service:
+        name: libvirtd
+        state: started
+        enabled: true
+      become: true
+      tags: libvirt
+
+    - name: Ensure /dev/kvm ownership is set to root:kvm
+      ansible.builtin.file:
+        path: /dev/kvm
+        owner: root
+        group: kvm
+        mode: '0660'
+      become: true
+      tags: libvirt
+
+    ### Install Vagrant
+    # https://developer.hashicorp.com/vagrant/install
+    - name: Add HashiCorp yum repository
+      ansible.builtin.yum_repository:
+        name: hashicorp
+        description: HashiCorp Stable Release - $basearch
+        file: hashicorp
+        baseurl: "https://rpm.releases.hashicorp.com/RHEL/$releasever/$basearch/stable"
+        enabled: true
+        gpgcheck: true
+        gpgkey: https://rpm.releases.hashicorp.com/gpg
+      become: true
+      tags: vagrant
+
+    - name: Install Vagrant
+      ansible.builtin.dnf:
+        name: vagrant
+        state: present
+        update_cache: true
+      become: true
+      tags: vagrant
+
+    ### Setup Vagrant Libvirt
+    - name: Install vagrant-libvirt plugin
+      ansible.builtin.command: >
+        vagrant plugin install vagrant-libvirt
+      tags: vagrant-libvirt
+
+    - name: Set original user fact
+      ansible.builtin.set_fact:
+        original_user: "{{ ansible_user_id }}"
+      tags: vagrant-libvirt
+
+    - name: Add ansible user to libvirt group
+      ansible.builtin.user:
+        name: "{{ original_user }}"
+        groups: libvirt
+        append: true
+      become: true
+      tags: vagrant-libvirt
