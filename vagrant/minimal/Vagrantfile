@@ -1,0 +1,89 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "almalinux/9"
+
+  config.vm.hostname = "minimal"
+
+  config.vm.provider :libvirt do |libvirt|
+    # CPU optimization for maximum performance
+    libvirt.cpus = 1
+    libvirt.cpu_mode = "host-passthrough"
+    libvirt.nested = true
+
+    libvirt.memory = 2048
+
+    # Optimized storage configuration
+    libvirt.machine_virtual_size = 20
+    libvirt.disk_bus = "scsi"
+    libvirt.disk_driver :cache => "writeback", :discard => "unmap"
+
+    # Optimized video configuration
+    libvirt.video_type = "virtio"
+
+    # Modern machine type
+    libvirt.machine_type = "q35"
+
+    libvirt.management_network_mtu = 9000
+
+    # Change the management network address to prevent conflicts when running nested VMs
+    #libvirt.management_network_address = "192.168.121.0/24"
+  end
+
+  # Disable default synced folder due to the host path of the shared folder is not supported on WSL
+  config.vm.synced_folder '.', '/vagrant', disabled: true
+
+  config.vm.provision "shell", inline: <<-SHELL
+    set -e
+
+    # Detect OS and install required tools
+    if [[ -f /etc/os-release ]]; then
+      source /etc/os-release
+      case "$ID" in
+        "ubuntu"|"debian")
+          apt-get update
+          apt-get install -y cloud-guest-utils cloud-init
+          ;;
+        "centos"|"rhel"|"rocky"|"almalinux"|"fedora")
+          # Try dnf first, fall back to yum
+          if command -v dnf >/dev/null 2>&1; then
+            dnf install -y cloud-utils-growpart cloud-init
+          else
+            yum install -y cloud-utils-growpart cloud-init
+          fi
+          ;;
+      esac
+    fi
+
+    # Create cloud-init configuration for storage expansion
+    mkdir -p /etc/cloud/cloud.cfg.d
+    cat > /etc/cloud/cloud.cfg.d/99-vagrant-growpart.cfg << 'EOF'
+growpart:
+  mode: auto
+  devices: ["/"]
+  ignore_growroot_disabled: false
+
+resize_rootfs: true
+
+# Run on every boot to handle resize operations
+cloud_config_modules:
+ - growpart
+ - resizefs
+
+# Ensure this runs early in the boot process
+cloud_init_modules:
+ - growpart
+EOF
+
+    # Apply cloud-init configuration immediately
+    if command -v cloud-init >/dev/null 2>&1; then
+      echo "Applying cloud-init storage expansion..."
+      cloud-init single --name growpart
+      cloud-init single --name resizefs
+      echo "Storage expansion completed successfully"
+    else
+      echo "Cloud-init not available, exiting without expansion..."
+    fi
+  SHELL
+end

@@ -1,0 +1,203 @@
+---
+- name: Setup Vagrant-libvirt
+  hosts: vagrant_host
+  tasks:
+    ### Prerequisite checks for WSL environment
+    - name: Check if running on WSL
+      ansible.builtin.stat:
+        path: /proc/sys/fs/binfmt_misc/WSLInterop
+      register: wsl_check
+      tags: prerequisites
+
+    - name: Check if systemd is running on WSL
+      ansible.builtin.command: >
+        systemctl --version
+      register: systemd_status
+      changed_when: false
+      failed_when: false
+      when: wsl_check.stat.exists
+      tags: prerequisites
+
+    - name: Show WSL systemd configuration warning and exit
+      ansible.builtin.fail:
+        msg: |
+          WSL detected but systemd is not running.
+
+          To enable systemd on WSL, please:
+          1. Add the following to /etc/wsl.conf:
+             [boot]
+             systemd=true
+          2. Restart your WSL distribution from PowerShell:
+             wsl --shutdown
+          3. Re-run this playbook after WSL restart
+      when:
+        - wsl_check.stat.exists
+        - systemd_status.rc != 0
+      tags: prerequisites
+
+    - name: Install NetworkManager (RHEL)
+      ansible.builtin.dnf:
+        name: NetworkManager
+        state: present
+        update_cache: true
+      become: true
+      when: ansible_os_family == "RedHat"
+      tags: prerequisites
+
+    - name: Start and enable NetworkManager (RHEL)
+      ansible.builtin.systemd_service:
+        name: NetworkManager
+        state: started
+        enabled: true
+        masked: false
+      become: true
+      when: ansible_os_family == "RedHat"
+      tags: prerequisites
+
+    - name: Start and enable systemd-networkd (Ubuntu/Debian)
+      ansible.builtin.systemd_service:
+        name: systemd-networkd
+        state: started
+        enabled: true
+      become: true
+      when: ansible_os_family == "Debian"
+      tags: prerequisites
+
+    ### Install Vagrant - RHEL Family
+    # https://developer.hashicorp.com/vagrant/install
+    - name: Add HashiCorp yum repository (RHEL)
+      ansible.builtin.yum_repository:
+        name: hashicorp
+        description: HashiCorp Stable Release - $basearch
+        file: hashicorp
+        baseurl: "https://rpm.releases.hashicorp.com/RHEL/$releasever/$basearch/stable"
+        enabled: true
+        gpgcheck: true
+        gpgkey: https://rpm.releases.hashicorp.com/gpg
+      become: true
+      when: ansible_os_family == "RedHat"
+      tags: vagrant
+
+    - name: Install Vagrant (RHEL)
+      ansible.builtin.dnf:
+        name: vagrant
+        state: present
+        update_cache: true
+      become: true
+      when: ansible_os_family == "RedHat"
+      tags: vagrant
+
+    ### Install Vagrant - Debian/Ubuntu Family
+    - name: Download HashiCorp GPG key (Ubuntu/Debian)
+      ansible.builtin.get_url:
+        url: https://apt.releases.hashicorp.com/gpg
+        dest: /usr/share/keyrings/hashicorp-archive-keyring.asc
+        mode: '0644'
+      become: true
+      when: ansible_os_family == "Debian"
+      tags: vagrant
+
+    - name: Add HashiCorp apt repository (Ubuntu/Debian)
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/hashicorp-archive-keyring.asc] https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main"
+        state: present
+        filename: hashicorp
+      become: true
+      when: ansible_os_family == "Debian"
+      tags: vagrant
+
+    - name: Install Vagrant (Ubuntu/Debian)
+      ansible.builtin.apt:
+        name: vagrant
+        state: present
+        update_cache: true
+      become: true
+      when: ansible_os_family == "Debian"
+      tags: vagrant
+
+    ### Install libvirt - RHEL Family
+    # https://vagrant-libvirt.github.io/vagrant-libvirt/installation.html#centos
+    - name: Install dnf-plugins-core
+      ansible.builtin.dnf:
+        name: dnf-plugins-core
+        state: present
+        update_cache: true
+      become: true
+      when: ansible_os_family == "RedHat"
+      tags: libvirt
+
+    - name: Enable CRB repository
+      ansible.builtin.command: >
+        dnf config-manager --set-enabled crb
+      become: true
+      when: ansible_os_family == "RedHat"
+      tags: libvirt
+
+    - name: Install virtualization packages and remaining dependencies (RHEL)
+      ansible.builtin.dnf:
+        name:
+          - '@Virtualization Hypervisor'
+          - '@Virtualization Tools'
+          - '@Development Tools'
+          - libvirt-devel
+        state: present
+        update_cache: true
+      become: true
+      when: ansible_os_family == "RedHat"
+      tags: libvirt
+
+    ### Install libvirt - Debian/Ubuntu Family
+    # https://vagrant-libvirt.github.io/vagrant-libvirt/installation.html#ubuntu--debian
+    - name: Install virtualization packages and remaining dependencies (Ubuntu/Debian)
+      ansible.builtin.apt:
+        name:
+          - build-essential
+          - libvirt-daemon-system
+          - libvirt-dev
+          - ebtables
+          - libguestfs-tools
+          - libxslt-dev
+          - libxml2-dev
+          - zlib1g-dev
+          - ruby-dev
+        state: present
+        update_cache: true
+      become: true
+      when: ansible_os_family == "Debian"
+      tags: libvirt
+
+    - name: Start and enable libvirtd service
+      ansible.builtin.systemd_service:
+        name: libvirtd
+        state: started
+        enabled: true
+      become: true
+      tags: libvirt
+
+    - name: Ensure /dev/kvm ownership is set to root:kvm
+      ansible.builtin.file:
+        path: /dev/kvm
+        owner: root
+        group: kvm
+        mode: '0660'
+      become: true
+      tags: libvirt
+
+    - name: Set original user fact
+      ansible.builtin.set_fact:
+        original_user: "{{ ansible_user_id }}"
+      tags: libvirt
+
+    - name: Add user to libvirt group
+      ansible.builtin.user:
+        name: "{{ original_user }}"
+        groups: libvirt
+        append: true
+      become: true
+      tags: libvirt
+
+    ### Setup vagrant-libvirt plugin
+    - name: Install vagrant-libvirt plugin
+      ansible.builtin.command: >
+        vagrant plugin install vagrant-libvirt
+      tags: vagrant-libvirt

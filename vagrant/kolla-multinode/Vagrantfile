@@ -1,0 +1,144 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+
+  config.vm.define "controller" do |controller|
+    controller.vm.box = "rockylinux/9"
+    controller.vm.hostname = "controller"
+
+    controller.vm.provider :libvirt do |libvirt|
+      libvirt.cpus = 8
+      libvirt.cpu_mode = "host-passthrough"
+      libvirt.nested = true
+
+      libvirt.memory = 16384
+
+      libvirt.machine_virtual_size = 40
+      libvirt.disk_bus = "scsi"
+      libvirt.disk_driver :cache => "writeback", :discard => "unmap"
+
+      libvirt.video_type = "virtio"
+
+      libvirt.machine_type = "q35"
+
+      libvirt.management_network_mtu = 9000
+    end
+
+    controller.vm.network :private_network,
+      :ip => "10.0.2.10",
+      :libvirt__netmask => "255.255.255.0",
+      :libvirt__mtu => 9000
+  end
+
+  config.vm.define "compute1" do |compute1|
+    compute1.vm.box = "rockylinux/9"
+    compute1.vm.hostname = "compute1"
+
+    compute1.vm.provider :libvirt do |libvirt|
+      libvirt.cpus = 4
+      libvirt.cpu_mode = "host-passthrough"
+      libvirt.nested = true
+
+      libvirt.memory = 8192
+
+      libvirt.machine_virtual_size = 40
+      libvirt.disk_bus = "scsi"
+      libvirt.disk_driver :cache => "writeback", :discard => "unmap"
+
+      libvirt.video_type = "virtio"
+
+      libvirt.machine_type = "q35"
+
+      libvirt.management_network_mtu = 9000
+    end
+
+    compute1.vm.network :private_network,
+      :ip => "10.0.2.11",
+      :libvirt__netmask => "255.255.255.0",
+      :libvirt__mtu => 9000
+  end
+
+  config.vm.define "compute2" do |compute2|
+    compute2.vm.box = "rockylinux/9"
+    compute2.vm.hostname = "compute2"
+
+    compute2.vm.provider :libvirt do |libvirt|
+      libvirt.cpus = 4
+      libvirt.cpu_mode = "host-passthrough"
+      libvirt.nested = true
+
+      libvirt.memory = 8192
+
+      libvirt.machine_virtual_size = 40
+      libvirt.disk_bus = "scsi"
+      libvirt.disk_driver :cache => "writeback", :discard => "unmap"
+
+      libvirt.video_type = "virtio"
+
+      libvirt.machine_type = "q35"
+
+      libvirt.management_network_mtu = 9000
+    end
+
+    compute2.vm.network :private_network,
+      :ip => "10.0.2.12",
+      :libvirt__netmask => "255.255.255.0",
+      :libvirt__mtu => 9000
+  end
+
+  config.vm.synced_folder '.', '/vagrant', disabled: true
+
+  config.vm.provision "shell", inline: <<-SHELL
+    set -e
+
+    # Detect OS and install required tools
+    if [[ -f /etc/os-release ]]; then
+      source /etc/os-release
+      case "$ID" in
+        "ubuntu"|"debian")
+          apt-get update
+          apt-get install -y cloud-guest-utils cloud-init
+          ;;
+        "centos"|"rhel"|"rocky"|"almalinux"|"fedora")
+          # Try dnf first, fall back to yum
+          if command -v dnf >/dev/null 2>&1; then
+            dnf install -y cloud-utils-growpart cloud-init
+          else
+            yum install -y cloud-utils-growpart cloud-init
+          fi
+          ;;
+      esac
+    fi
+
+    # Create cloud-init configuration for storage expansion
+    mkdir -p /etc/cloud/cloud.cfg.d
+    cat > /etc/cloud/cloud.cfg.d/99-vagrant-growpart.cfg << 'EOF'
+growpart:
+  mode: auto
+  devices: ["/"]
+  ignore_growroot_disabled: false
+
+resize_rootfs: true
+
+# Run on every boot to handle resize operations
+cloud_config_modules:
+ - growpart
+ - resizefs
+
+# Ensure this runs early in the boot process
+cloud_init_modules:
+ - growpart
+EOF
+
+    # Apply cloud-init configuration immediately
+    if command -v cloud-init >/dev/null 2>&1; then
+      echo "Applying cloud-init storage expansion..."
+      cloud-init single --name growpart
+      cloud-init single --name resizefs
+      echo "Storage expansion completed successfully"
+    else
+      echo "Cloud-init not available, exiting without expansion..."
+    fi
+  SHELL
+end
